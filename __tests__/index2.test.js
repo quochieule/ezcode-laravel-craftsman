@@ -63,18 +63,79 @@ test('input event: prompt phức tạp bị transform ép dùng laravel_plan', a
   const { pi, events } = stubPi();
   entryFactory(pi);
   const inputHandler = events.find((e) => e.ev === 'input').h;
+  const original = 'thêm nút duyệt đơn cho admin, xong gửi mail cho khách';
   const res = await inputHandler(
-    { text: 'thêm nút duyệt đơn cho admin, xong gửi mail cho khách' },
+    { text: original },
     { sessionId: 's1', cwd: appRoot },
   );
   assert.ok(res, 'phải transform');
   assert.ok(res.text.includes('laravel_plan'));
+  // QUAN TRỌNG: transform phải GIỮ yêu cầu gốc — nếu không agent không có goal
+  assert.ok(
+    res.text.includes(original),
+    'transform không được nuốt yêu cầu gốc của user',
+  );
   // prompt do chính mình transform → không lặp
   const res2 = await inputHandler(
     { text: res.text },
     { sessionId: 's1', cwd: appRoot },
   );
   assert.equal(res2, undefined);
+});
+
+test('input event: transform giữ goal khi prompt là mô tả công việc tiếng Anh (regression BizHub)', async () => {
+  const { pi, events } = stubPi();
+  entryFactory(pi);
+  const inputHandler = events.find((e) => e.ev === 'input').h;
+  const jobDescription =
+    'Enforce CCQ type for some companies. With some companies, we need to enforce the CCQ type. This should be done with the same logic as the deadline. When the project leads the preparation phase, the CCQ type should be reviewed and forced.';
+  const res = await inputHandler(
+    { text: jobDescription },
+    { sessionId: 's1', cwd: appRoot },
+  );
+  assert.ok(res, 'phải transform');
+  assert.ok(res.text.includes('laravel_plan'), 'phải ép gọi laravel_plan');
+  assert.ok(
+    res.text.includes('Enforce CCQ type'),
+    'yêu cầu gốc phải còn nguyên để làm goal cho laravel_plan',
+  );
+  assert.ok(
+    res.text.indexOf('Enforce CCQ type') > res.text.indexOf('[Craftsman]'),
+    'yêu cầu gốc nằm sau chỉ thị quy trình',
+  );
+  // intent dùng laravel_plan → phải có nhãn goal để model trích đúng
+  assert.ok(
+    /goal \(yêu cầu gốc/.test(res.text),
+    'phải có nhãn goal hướng dẫn truyền nguyên văn vào laravel_plan(goal=...)',
+  );
+});
+
+test('input event: MỌI intent đều giữ nguyên văn yêu cầu gốc', async () => {
+  const { pi, events } = stubPi();
+  entryFactory(pi);
+  const inputHandler = events.find((e) => e.ev === 'input').h;
+  const cases = [
+    {
+      intent: 'feature',
+      prompt: 'thêm nút duyệt đơn cho admin, xong gửi mail cho khách',
+    },
+    { intent: 'bugfix', prompt: 'form không submit được, báo lỗi 500' },
+    { intent: 'refactor', prompt: 'dọn dead code trong module order' },
+    { intent: 'optimize', prompt: 'trang orders tải chậm quá, tối ưu giúp' },
+    { intent: 'reverify', prompt: 'kiểm tra lại còn thiếu gì không' },
+    { intent: 'question', prompt: 'Hệ thống phân quyền thế nào?' },
+  ];
+  for (const c of cases) {
+    const res = await inputHandler(
+      { text: c.prompt },
+      { sessionId: 's1', cwd: appRoot },
+    );
+    assert.ok(res, `${c.intent}: phải transform`);
+    assert.ok(
+      res.text.includes(c.prompt),
+      `${c.intent}: nuốt mất yêu cầu gốc — ${c.prompt}`,
+    );
+  }
 });
 
 test('input event: trivial → không can thiệp; question → answer-mode', async () => {
@@ -94,6 +155,10 @@ test('input event: trivial → không can thiệp; question → answer-mode', as
   );
   assert.ok(q, 'question phải được transform sang answer-mode');
   assert.ok(q.text.includes('laravel_fingerprint'));
+  assert.ok(
+    q.text.includes('Hệ thống phân quyền thế nào?'),
+    'câu hỏi gốc phải được giữ lại',
+  );
 });
 
 test('tool_call gate: chặn edit khi chưa plan (strict mode)', async () => {

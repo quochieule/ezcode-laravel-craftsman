@@ -127,6 +127,9 @@ extensions/laravel-craftsman/
    mức    = trivial | vừa | phức tạp
    → trivial/question: không can thiệp (hoặc answer-mode)
    → phức tạp: transform prompt → ép agent gọi laravel_plan
+     ⚠️ TRANSFORM CHỈ THÊM CHỈ THỊ — luôn giữ nguyên văn yêu cầu gốc của user
+        (nối vào sau chỉ thị). Agent phải thấy goal để gọi laravel_plan(goal=...);
+        nếu thay thế prompt gốc, agent không biết phải làm gì → từ chối.
         │
 ② PHẢN BIỆN PROMPT — 3 subagent SONG SONG (context riêng)
    A "Người đọc yêu cầu" · B "Kẻ ngờ vực" · C "Người đối chiếu" (session + codebase)

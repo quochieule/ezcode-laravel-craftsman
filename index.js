@@ -128,7 +128,21 @@ export default function (pi) {
     if (result.intent === 'trivial') return undefined;
 
     const transformed = transformForIntent(result);
-    if (transformed) return transformed;
+    if (transformed) {
+      // QUAN TRỌNG: transform chỉ THÊM chỉ thị quy trình — luôn giữ nguyên
+      // yêu cầu gốc của user. Nếu chỉ trả text chỉ thị, agent không còn thấy
+      // goal → từ chối làm việc (bug: "không có mục tiêu").
+      // Intent dùng laravel_plan (feature/bugfix/refactor/optimize) → gắn nhãn
+      // `goal` rõ ràng để model truyền NGUYÊN VĂN vào laravel_plan(goal=...).
+      const goalHint =
+        ['feature', 'bugfix', 'refactor', 'optimize'].includes(result.intent)
+          ? 'goal (yêu cầu gốc của user — truyền NGUYÊN VĂN vào laravel_plan(goal=...)):'
+          : 'Yêu cầu gốc của user:'; // reverify/question: không cần trích goal
+      return {
+        ...transformed,
+        text: `${transformed.text}\n\n${goalHint}\n${text}`,
+      };
+    }
     return undefined;
   });
 
