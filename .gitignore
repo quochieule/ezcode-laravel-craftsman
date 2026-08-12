@@ -1,0 +1,8 @@
+# dependencies / runtime data
+node_modules/
+data/
+*.log
+.DS_Store
+
+# runtime data sinh bởi learning loop (memory/episodes) — không commit
+**/.ezcode/

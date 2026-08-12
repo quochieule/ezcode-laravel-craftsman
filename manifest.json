@@ -1,0 +1,108 @@
+{
+  "name": "laravel-craftsman",
+  "displayName": "Laravel Craftsman",
+  "version": "0.2.0",
+  "description": "Senior code intelligence cho Laravel + Blade + jQuery/Ajax: triage tự động, phản biện prompt, plan full-chain 5 subagent, contract diff, dead-code audit, Re-Verification Protocol, learning loop.",
+  "settings": {
+    "fields": [
+      {
+        "key": "php_bin",
+        "label": "PHP binary path",
+        "type": "text",
+        "description": "Đường dẫn php (mặc định: 'php' trong PATH)."
+      },
+      {
+        "key": "model_planner",
+        "label": "Planner model",
+        "type": "model_select",
+        "description": "Model cho critics + planners + critic (nên chọn model mạnh nhất)."
+      },
+      {
+        "key": "model_verifier",
+        "label": "Verifier model",
+        "type": "model_select",
+        "description": "Model cho RVP verifiers (khuyến nghị khác hãng nếu có — phản biện chéo). Bỏ trống = dùng Planner model."
+      },
+      {
+        "key": "model_triage",
+        "label": "Triage model",
+        "type": "model_select",
+        "description": "Model refine phân loại prompt (bỏ trống = chỉ dùng heuristic, 0 chi phí)."
+      },
+      {
+        "key": "strict_mode",
+        "label": "Strict mode",
+        "type": "select",
+        "options": ["true", "false"],
+        "default": "true",
+        "description": "Chặn edit khi yêu cầu phức tạp chưa explore/plan."
+      },
+      {
+        "key": "auto_rvp",
+        "label": "Auto RVP sau task",
+        "type": "select",
+        "options": ["true", "false"],
+        "default": "true",
+        "description": "Tự kiểm tra lại (deterministic + verifier) sau mỗi lượt agent."
+      },
+      {
+        "key": "plan_rounds",
+        "label": "Plan-critic rounds tối đa",
+        "type": "number",
+        "default": 3,
+        "description": "Số vòng critic→re-plan tối đa."
+      },
+      {
+        "key": "explore_budget",
+        "label": "Explore budget (bước)",
+        "type": "number",
+        "default": 30,
+        "description": "Ngân sách đọc file cho explorer."
+      },
+      {
+        "key": "rvp_verifiers",
+        "label": "Số verifier cho RVP",
+        "type": "number",
+        "default": 3,
+        "description": "Số subagent fresh-eyes trong RVP."
+      },
+      {
+        "key": "confidence_threshold",
+        "label": "Ngưỡng confidence chốt plan",
+        "type": "number",
+        "default": 0.8,
+        "description": "Critic score ≥ ngưỡng mới chốt plan (0–1)."
+      },
+      {
+        "key": "max_ask_rounds",
+        "label": "Số vòng hỏi user tối đa",
+        "type": "number",
+        "default": 2,
+        "description": "Giới hạn vòng clarification (mỗi vòng ≤ 5 câu)."
+      },
+      {
+        "key": "fingerprint_inject",
+        "label": "Inject fingerprint vào system prompt",
+        "type": "select",
+        "options": ["true", "false"],
+        "default": "true",
+        "description": "Chèn chân dung dự án vào đầu phiên (≤ 500 token)."
+      },
+      {
+        "key": "rvp_run_tests",
+        "label": "RVP chạy php artisan test thật",
+        "type": "select",
+        "options": ["true", "false"],
+        "default": "false",
+        "description": "Chạy test thật trong RVP (chậm — bật khi cần kiểm chứng sâu)."
+      },
+      {
+        "key": "command_timeout_ms",
+        "label": "Artisan timeout (ms)",
+        "type": "number",
+        "default": 60000,
+        "description": "Timeout cho mỗi lệnh artisan."
+      }
+    ]
+  }
+}

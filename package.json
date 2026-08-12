@@ -1,0 +1,8 @@
+{
+  "name": "ezcode-extension-laravel-craftsman",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Laravel Craftsman — senior code intelligence cho Laravel + Blade + jQuery/Ajax: fingerprint, schema, routes, frontend contracts, planning.",
+  "main": "index.js"
+}

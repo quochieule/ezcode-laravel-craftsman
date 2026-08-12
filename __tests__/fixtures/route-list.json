@@ -1,0 +1,34 @@
+[
+  {
+    "method": "GET|HEAD",
+    "uri": "admin/orders",
+    "name": "orders.index",
+    "action": "App\\Http\\Controllers\\OrderController@index",
+    "middleware": ["web", "auth", "role:admin"],
+    "domain": null
+  },
+  {
+    "method": "GET|HEAD",
+    "uri": "admin/orders/{order}",
+    "name": "orders.show",
+    "action": "App\\Http\\Controllers\\OrderController@show",
+    "middleware": ["web", "auth", "role:admin"],
+    "domain": null
+  },
+  {
+    "method": "POST",
+    "uri": "admin/orders/{order}/approve",
+    "name": "orders.approve",
+    "action": "App\\Http\\Controllers\\OrderController@approve",
+    "middleware": ["web", "auth", "role:admin"],
+    "domain": null
+  },
+  {
+    "method": "DELETE",
+    "uri": "admin/orders/{order}",
+    "name": "orders.destroy",
+    "action": "App\\Http\\Controllers\\OrderController@destroy",
+    "middleware": ["web", "auth", "role:admin"],
+    "domain": null
+  }
+]
