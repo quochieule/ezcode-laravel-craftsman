@@ -15,12 +15,12 @@
 Extension `laravel-craftsman` — toàn bộ (code + docs) nằm gọn trong folder `extensions/laravel-craftsman/` (docs: `extensions/laravel-craftsman/docs/LARAVEL-CRAFTSMAN.md`), sẵn sàng push lên git như 1 repo độc lập:
 
 1. **Triage mọi prompt** (intent × scope) → rẽ nhánh pipeline đúng loại việc: feature / bugfix / question / reverify / refactor / optimize / trivial.
-2. **Phản biện prompt** bằng 3 subagent song song (đọc yêu cầu / ngờ vực / đối chiếu session+codebase) → Requirements Map có nguồn → hỏi user đúng chỗ, có vết tìm, giới hạn vòng.
+2. **Phản biện prompt** bằng 1 critic gộp 3 vai (người đọc yêu cầu · kẻ ngờ vực · người đối chiếu) → Requirements Map có nguồn → hỏi user đúng chỗ, có vết tìm, giới hạn vòng.
 3. **Explore có nền tảng**: ground truth từ `php artisan` (routes, schema, version, packages) + code graph (CBM) + vertical chain checklist — mọi evidence có nguồn, không bao giờ đoán.
-4. **5 subagent plan** song song (kiến trúc sư / frontend contract / data / security / risk) → hội đồng merge theo luật bằng chứng.
+4. **1 planner** lập kế hoạch (Kiến trúc sư backend — phần chính; vòng sửa dùng vai Risk).
 5. **Critic**: blocking/advisory, hallucination filter, claim-level verification (đọc lại code thật), cross-layer contract diff — plan chỉ chốt khi đạt gate, kèm UNKNOWNS khai báo công khai.
 6. **Thực thi có guardrail** (chặn edit vùng unknown) → **verify Laravel-aware** sau task.
-7. **RVP (Re-Verification Protocol)**: khi user nói "kiểm tra lại" → 3 kênh độc lập (deterministic + fresh-eyes subagent + reality) → báo cáo per-item ✓/✗/? — không bao giờ "trông ổn".
+7. **RVP (Re-Verification Protocol)**: khi user nói "kiểm tra lại" → 3 kênh độc lập (deterministic + 1 verifier fresh-eyes + reality) → báo cáo per-item ✓/✗/? — không bao giờ "trông ổn".
 8. **Học**: lỗi user tìm ra → thành check mới vĩnh viễn; câu hỏi đã trả lời → không hỏi lại; convention học được → inject từ đầu phiên.
 
 **Nguyên tắc bất biến:** mọi claim có nguồn · chỉ deterministic tạo gap (LLM không tự hỏi theo cảm giác) · không file thô vào bất kỳ LLM call nào · mỗi stage 1 context riêng, chỉ artifact đi qua biên giới.
@@ -93,9 +93,9 @@ extensions/laravel-craftsman/
 │   │   ├── blueprint.js        # ★ kiến thức tĩnh: 8 loại feature → vertical chain checklist
 │   │   └── contract-diff.js    # ★ cross-layer set-diff: blade ↔ JS ↔ FormRequest ↔ controller ↔ response keys
 │   ├── stages/
-│   │   ├── prompt-critics.js   # 3 subagent song song + hội đồng 0 → Requirements Map
-│   │   ├── explorer.js         # active explorer: vòng lặp agentic, ngân sách 25–40 bước
-│   │   ├── planners.js         # 5 subagent song song + hội đồng merge
+│   │   ├── prompt-critics.js   # 1 critic gộp 3 vai → Requirements Map
+│   │   ├── explorer.js         # active explorer: đọc seed (0 LLM) + 1 LLM call chọn file tiếp
+│   │   ├── planners.js         # 1 planner (architect/risk) — không hội đồng
 │   │   ├── critic.js           # blocking/advisory + claim-level verification + score + unknowns
 │   │   └── rvp.js              # Re-Verification Protocol: 3 kênh + hợp nhất + báo cáo
 │   └── panel.js                # setPanelSchema + publishToSession → dashboard
@@ -135,11 +135,20 @@ extensions/laravel-craftsman/
         (nối vào sau chỉ thị). Agent phải thấy goal để gọi laravel_plan(goal=...);
         nếu thay thế prompt gốc, agent không biết phải làm gì → từ chối.
         │
-② PHẢN BIỆN PROMPT — 3 subagent SONG SONG (context riêng)
-   A "Người đọc yêu cầu" · B "Kẻ ngờ vực" · C "Người đối chiếu" (session + codebase)
-   → HỘI ĐỒNG 0 (1 context mới): Requirements Map
+② PHẢN BIỆN PROMPT — critic(s) SONG SONG (context riêng)
+   1 critic GỘP 3 vai (A "Người đọc yêu cầu" · B "Kẻ ngờ vực" · C "Người đối chiếu")
+   → Requirements Map
      { explicit[], ambiguous[], missing[], assumptions[], intent/scope + độ tin }
-   mỗi claim kèm nguồn · 3 bên bất đồng intent/scope → xử lý phủ cả 2 khả năng
+   mỗi claim kèm nguồn · bất đồng intent/scope → xử lý phủ cả 2 khả năng
+
+   ⚙ ĐO LƯỜNG thật (opencode-go/deepseek-v4-flash, payload pipeline):
+     1 critic = 10.8s (1,450 tok) · 3 critics SONG SONG = 7.8s (2,920 tok)
+     3 critics tuần tự = 24.6s
+     → 3 critics ĐÃ song song: giảm 3→1 KHÔNG mất wall-clock, tiết kiệm
+       TOKEN 3× và giảm burst (provider treo khi nhiều request cùng lúc).
+     Critics KHÔNG chạy sub-agent (kể cả use_subagents=true): sub-agent critic
+     đo 148s vs 10.8s (chậm ~14×) mà critics không cần tool đọc file —
+     sub-agent chỉ dành cho planners/verifiers (cần tool thật).
         │
 ③ XỬ LÝ GAP (gap-registry)
    intent gap (không có trong code) + blocking → hỏi user:
@@ -147,14 +156,18 @@ extensions/laravel-craftsman/
    hết vòng → đi tiếp với assumptions khai báo
         │
 ④ EXPLORE CÓ NỀN TẢNG (active explorer — §6.7)
+   v0.6: 1 LẦN — đọc seed files (0 LLM) → 1 LLM call DUY NHẤT chọn tối đa 3 file
+   cần đọc tiếp → đọc xong dừng (trước: vòng lặp ~15 call LLM nối tiếp)
+   v0.7 evidence mở rộng (0 LLM): view tree (layout→partial) · side-effect chain
+   (event→listener→job→command→mail) · knowledge + learned-checks (đóng vòng học)
+   · code graph sâu (search_graph/trace_path qua CBM — best-effort ≤3s)
    fingerprint + schema + routes + system map + vertical chain + analog
-   mọi evidence: { touchpoint, files, nguồn } → understanding map cập nhật liên tục
+   mọi evidence: { touchpoint, files, nguồn } → understanding map cập nhật
         │
-⑤ 5 SUBAGENT PLAN — SONG SONG (context riêng, pack riêng, cùng schema)
-   1 Kiến trúc sư backend · 2 Frontend Contract ★ · 3 Data Layer
-   · 4 Security & Auth · 5 Risk & Test
-   → HỘI ĐỒNG (1 context mới): đồng thuận = chốt · bất đồng = theo bằng chứng
-     · 1 bên thấy = kiểm chứng bắt buộc (không loại)
+⑤ PLANNER — "tất cả chỉ chạy 1 lần, không gộp lại" (v0.6)
+   1 planner duy nhất — mặc định Kiến trúc sư backend (phần chính)
+   → plan JSON trực tiếp (không hội đồng, không merge)
+   vòng re-plan (critic báo blocking) dùng riêng vai Risk — vẫn 1 lần
         │
 ⑥ CRITIC (deterministic làm xương sống — §6.10)
    🔴 blocking: hallucination (file/symbol tồn tại?) · checklist đủ? · contract lệch?
@@ -269,8 +282,10 @@ Mỗi mắt xích verify được ✓/✗. 8 loại feature v1: API endpoint m�
 
 ### 6.6 Active Explorer
 
-Vòng lặp agentic của riêng extension (execFile + LLM riêng, không xin phép agent chính):
-mỗi vòng: quyết định cần biết gì → gọi tool thật (CBM search/trace/impact, đọc file, artisan) → xem kết quả → đi tiếp. Ngân sách hào phóng: 25–40 bước, cấu hình được. Checklist deterministic quyết định _phải phủ gì_, explorer quyết định _đi sâu đâu_.
+v0.6 — "chạy 1 lần": đọc toàn bộ seed files (mentions từ requirements/context —
+0 LLM call), rồi **1 LLM call DUY NHẤT** chọn tối đa 3 file cần đọc tiếp, đọc xong
+là dừng (trước: vòng lặp agentic tới 15 call LLM nối tiếp — nút thắt thời gian).
+Checklist deterministic quyết định _phải phủ gì_, explorer quyết định _đi sâu đâu_.
 
 ### 6.7 Cross-layer Contract Diff ★ (task "cả hai tầng")
 
@@ -284,12 +299,42 @@ Migration cột mới ↔ Blade hiển thị ↔ Validation rule
 
 Mismatch nào = 🔴 blocking. Model không bao giờ tự nhớ nổi ở codebase lớn — set-diff thì 100% chính xác.
 
-### 6.8 Hội đồng subagent
+### 6.8 Sub-agent (opt-in `use_subagents`) — 1 lần chạy
 
-- Stage ②: 3 critics (đọc yêu cầu / ngờ vực / đối chiếu) — output cùng schema
-- Stage ⑤: 5 planners — output cùng schema `{ touchpoints[], files[], tests[], risks[], assumptions[] }`
-- Merge: mỗi bên nêu bằng chứng cho bất đồng; "chỉ 1 bên thấy" → kiểm chứng bắt buộc, không loại
-- Mỗi subagent: context riêng, pack riêng (evidence-packer), chạy `Promise.all`
+> **v0.6 — theo yêu cầu user: "tất cả chỉ chạy 1 lần, không cần chạy nhiều sau
+
+> đó gộp lại"**. Mỗi stage chạy ĐÚNG 1 lần: 1 critic gộp · 1 planner (architect,
+
+> re-plan = risk) · 1 verifier RVP. Không còn N-vai song song + merge hội đồng
+
+> (mergeCritics/mergePlans đã xóa).
+
+> Khi bật `use_subagents`: lượt chạy DUY NHẤT đó là 1 AgentSession in-process
+
+> (`lib/subagent.js` — pattern workflows/src/runner.js): context BLANK (fresh
+
+> eyes), tool read-only `['read','ls','find','grep']`, model override, timeout
+
+> 180s, dispose sau cùng.
+
+> - Planner tự ĐỌC FILE THẬT kiểm chứng touchpoint → hết hallucination file
+
+>   (đo được: 1 sub-agent thật chạy 29s, 15 tool events ls/find/read, output
+
+>   "All files verified" trước khi chốt JSON plan).
+
+> - Verifier RVP tự kiểm chứng evidence file:line → giảm false-missing → giảm
+
+>   vòng lặp reverify (bằng chứng trước: 71–73 vòng trên BizHub).
+
+> - Log sub-agent (delta/tool/file) publish lên panel qua
+
+>   `background.publishState(..., { subagents })` — schema render live.
+
+> - Critics KHÔNG dùng sub-agent (đo: sub-agent critic 148s vs call 10.8s —
+
+>   chậm ~14×, critics không cần tool).
+
 
 ### 6.9 Critic — blocking/advisory + claim verification
 
@@ -365,7 +410,7 @@ Hợp nhất: 3 kênh cùng gap = chắc chắn · deterministic thắng LLM khi
 | Plan artifact                                   | ~1.5k | Main                                  |
 | Agent đọc-để-sửa (5 file × 1–2k, có line-range) | ~6–8k | Main (sàn của agentic IDE — bắt buộc) |
 | RVP report                                      | ~1k   | Main                                  |
-| 3 critics + merge                               | ~12k  | Sub-context riêng                     |
+| 1 critic gộp 3 vai                              | ~4k   | 1 context                            |
 | 5 planners + hội đồng                           | ~35k  | Sub-context riêng                     |
 | Critic + claim verification                     | ~8k   | Sub-context riêng                     |
 | RVP verifiers (3–4)                             | ~15k  | Sub-context riêng                     |
@@ -443,7 +488,7 @@ Mọi stage output là JSON artifact — nhìn được, test được, diff đ�
 | ---------------------- | ------------ | ------- | ----------------------------------------------------- |
 | `model_triage`         | model_select | —       | Model cho triage (rẻ là được)                         |
 | `model_planner`        | model_select | —       | Model cho 5 plan passes (mạnh nhất có)                |
-| `model_critic`         | model_select | —       | Model cho critic/merge (khuyến nghị khác hãng nếu có) |
+| `model_planner`        | model_select | —       | Model cho critic + planner (khuyến nghị model mạnh nhất) |
 | `model_verifier`       | model_select | —       | Model cho RVP verifiers                               |
 | `confidence_threshold` | number       | 0.8     | Ngưỡng chốt plan                                      |
 | `max_plan_rounds`      | number       | 3       | Vòng plan-critic tối đa                               |
@@ -463,7 +508,7 @@ Mọi stage output là JSON artifact — nhìn được, test được, diff đ�
 | Bước                                                    | Gọi model                                                                 |
 | ------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Triage mọi prompt                                       | 1 call rẻ (~1–2s, intent=trivial thì dừng ở đó)                           |
-| Plan đầy đủ 1 feature vừa                               | ~15–20 calls (3 critics + merge + 5 planners + hội đồng + critic + retry) |
+| Plan đầy đủ 1 feature vừa                               | ~4–7 calls (1 critic gộp + explorer + 1 planner + critic + retry-risk) |
 | RVP đầy đủ                                              | ~5–10 calls + toàn bộ deterministic re-run                                |
 | Phần deterministic (parser, diff, alive-set, checklist) | 0 — code thuần                                                            |
 
@@ -495,7 +540,7 @@ Không summarize chat · không embedding v1 (lexical/keyword trước) · khôn
 | **M0** | Spike: artisan calls từ extension (execFile + cwd), copy bridge CBM, `sessionManager.getEntries()`, 3 LLM song song, **scan parser blade/JS trên repo thật** | Parser đếm/khớp được selector+URL thực tế; 3 giả định chạy được |
 | **M1** | Ground truth: fingerprint (backend+frontend) + schema + routes + system map                                                                                  | Đúng 100% với repo thật                                         |
 | **M2** | Triage + intent taxonomy + answer-mode + trivial-pass + gap registry                                                                                         | Bắt đúng loại việc prompt giả lập; câu hỏi đúng trọng tâm       |
-| **M3** | 3 prompt-critics + merge + clarification gate + understanding map                                                                                            | Bắt được prompt mơ hồ; hỏi có vết tìm; ≤ 2 vòng                 |
+| **M3** | 1 prompt-critic gộp 3 vai + clarification gate + understanding map                                                                                              | Bắt được prompt mơ hồ; hỏi có vết tìm; ≤ 2 vòng                 |
 | **M4** | Active explorer + vertical chain + contract diff                                                                                                             | Coverage ≥ 90%; diff bắt mismatch giả lập                       |
 | **M5** | 5 plan-passes + hội đồng + critic + gate + claim verification                                                                                                | 0 hallucination; plan sai bị critic bắt trong test giả lập      |
 | **M6** | Dead code audit (alive-set + 3 mức) + `laravel_trace_flow`                                                                                                   | 🟡/🔴 khớp ground truth của user trên repo thật                 |

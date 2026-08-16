@@ -149,6 +149,29 @@ test('INTEGRATION: laravel_plan CHẠY NỀN — execute trả về ngay, plan t
   );
 });
 
+test('INTEGRATION: use_subagents bật nhưng thiếu spawnSubagent → fallback parallel calls, plan vẫn tới', async () => {
+  const bg = fakeBgPi();
+  const ctx = {
+    cwd: appRoot,
+    extensionSettings: {
+      model_planner: { provider: 'fake', modelId: 'fake' },
+      use_subagents: 'true', // bật nhưng ctx KHÔNG có spawnSubagent/forkContext
+    },
+    createModelsCollection: fakeModels,
+    background: createBackgroundManager(bg.pi),
+  };
+  const res = await planTool.execute(
+    't-fallback',
+    { goal: 'thêm nút duyệt đơn' },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(res.details?.background, true, 'vẫn chạy nền');
+  const msg = await waitFor(() => bg.delivered.find((d) => d.text.includes('PLAN')));
+  assert.ok(msg.text.includes('PLAN'), 'plan vẫn tới qua followUp (fallback call mode)');
+});
+
 test('INTEGRATION: laravel_plan guard — 1 task nền/session, gọi lần 2 bị chặn', async () => {
   const bg = fakeBgPi();
   const ctx = {

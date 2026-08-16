@@ -68,6 +68,21 @@ export default {
     const modelCfg = cfg.model_verifier || cfg.model_planner;
     const opts = settingsOpts(ctx);
 
+    // Sub-agent thật (hướng (b)) cho verifier fresh-eyes — opt-in use_subagents.
+    // Verifier có tool read → tự kiểm chứng evidence file:line thay vì tin diff
+    // text → giảm false-missing → giảm vòng lặp reverify (71–73 vòng trên BizHub).
+    let subagent = null;
+    if (cfg.use_subagents === true || cfg.use_subagents === 'true') {
+      const { createSubagentRunner } = await import('../lib/subagent.js');
+      subagent = createSubagentRunner(ctx, cfg);
+      if (!subagent.available) {
+        console.warn(
+          '[craftsman] use_subagents bật nhưng thiếu spawnSubagent/forkContext — fallback parallel calls',
+        );
+        subagent = null;
+      }
+    }
+
     // plan giả từ tham số: files đã sửa → deterministic check
     const plan = {
       files: Array.isArray(params.files) ? params.files : [],
@@ -124,7 +139,7 @@ export default {
               : null,
           modelCfg,
           signal,
-          verifierCount: Number(cfg.rvp_verifiers ?? 3),
+          subagent,
         },
       );
 

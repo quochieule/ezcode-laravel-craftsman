@@ -115,7 +115,9 @@ test('CONCURRENCY: 3 background plan (3 session khác nhau) chạy SONG SONG —
   const models = delayedFakeModels(300);
   const mkCtx = (sid) => ({
     cwd: appRoot,
-    extensionSettings: { model_planner: { provider: 'fake', modelId: 'fake' } },
+    extensionSettings: {
+      model_planner: { provider: 'fake', modelId: 'fake' },
+    },
     createModelsCollection: () => models,
     background: mgr,
     sessionManager: { getSessionId: () => sid },
@@ -139,9 +141,11 @@ test('CONCURRENCY: 3 background plan (3 session khác nhau) chạy SONG SONG —
 
   // ── BẰNG CHỨNG SONG SONG ──
   // 1) LLM layer: nhiều call chạy đồng thời (nếu bị serialize sẽ luôn = 1)
+  // Mỗi stage giờ chỉ 1 call (critic gộp / 1 planner) — 3 pipeline đè nhau
+  // nên phải có lúc ≥ 2 call cùng in-flight (serialize sẽ luôn = 1).
   assert.ok(
-    maxInFlight >= 5,
-    `phải có lúc ≥ 5 call LLM cùng in-flight (5 planners song song), thực tế = ${maxInFlight}`,
+    maxInFlight >= 2,
+    `3 pipeline song song phải có lúc ≥ 2 call LLM cùng in-flight, thực tế = ${maxInFlight}`,
   );
   // 2) Wall: 3 pipeline song song < 2.5× 1 pipeline (serialize sẽ ≈ 3×)
   assert.ok(

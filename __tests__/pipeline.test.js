@@ -1,7 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeCritics } from '../lib/stages/prompt-critics.js';
-import { mergePlans } from '../lib/stages/planners.js';
 import {
   checkFilesExist,
   checkChecklistCoverage,
@@ -19,95 +17,6 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(here, 'fixtures', 'laravel-app');
-
-test('mergeCritics: union có dedup + intent theo đa số + bất đồng', () => {
-  const merged = mergeCritics([
-    {
-      intent: 'feature',
-      scope: 'both',
-      explicit: ['nút duyệt', 'gửi mail'],
-      ambiguous: ['duyệt nghĩa gì'],
-      assumptions: ['dùng queue'],
-      sessionFacts: ['đã chốt Sanctum'],
-    },
-    {
-      intent: 'feature',
-      scope: 'both',
-      explicit: ['nút duyệt'],
-      ambiguous: [],
-      assumptions: ['dùng queue'],
-      sessionFacts: ['đã chốt Sanctum'],
-    },
-    {
-      intent: 'bugfix',
-      scope: 'both',
-      explicit: ['gửi mail'],
-      ambiguous: ['mail cho ai'],
-      assumptions: [],
-      sessionFacts: [],
-    },
-  ]);
-  assert.equal(merged.intent, 'feature'); // đa số 2/3
-  assert.deepEqual(merged.explicit, ['nút duyệt', 'gửi mail']);
-  assert.ok(merged.ambiguous.includes('duyệt nghĩa gì'));
-  assert.ok(merged.ambiguous.includes('mail cho ai'));
-  assert.equal(merged.disagreement, true); // 1 critic lệch intent
-});
-
-test('mergePlans: union touchpoints + conflict detection', () => {
-  const merged = mergePlans([
-    {
-      touchpoints: [
-        {
-          item: 'route',
-          action: 'existing',
-          file: 'routes/web.php',
-          reason: 'đã có',
-        },
-        {
-          item: 'controller',
-          action: 'modify',
-          file: 'OrderController.php',
-          reason: 'x',
-        },
-      ],
-      files: ['a.php'],
-      tests: ['t1'],
-      risks: ['r1'],
-      assumptions: ['a1'],
-      unknowns: ['u1'],
-    },
-    {
-      touchpoints: [
-        {
-          item: 'route',
-          action: 'new',
-          file: 'routes/web.php',
-          reason: 'phải thêm',
-        },
-        {
-          item: 'view',
-          action: 'modify',
-          file: 'detail.blade.php',
-          reason: 'y',
-        },
-      ],
-      files: ['b.php'],
-      tests: ['t2'],
-      risks: ['r2'],
-      assumptions: ['a1'],
-      unknowns: [],
-    },
-  ]);
-  assert.equal(merged.touchpoints.length, 3);
-  const route = merged.touchpoints.find((t) => t.item === 'route');
-  assert.ok(route.conflict, 'bất đồng action phải được đánh dấu');
-  assert.deepEqual(route.conflict, ['existing', 'new']);
-  assert.deepEqual(merged.files, ['a.php', 'b.php']);
-  assert.deepEqual(merged.tests, ['t1', 't2']);
-  assert.deepEqual(merged.assumptions, ['a1']);
-  assert.deepEqual(merged.unknowns, ['u1']);
-});
 
 test('critic: hallucination filter + checklist coverage trên fixture', async () => {
   const missing = await checkFilesExist(appRoot, [

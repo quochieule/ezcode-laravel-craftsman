@@ -50,6 +50,8 @@ export default function (pi) {
           extensionSettings: pi.settings.all(),
           createModelsCollection: pi.createModelsCollection,
           background,
+          spawnSubagent: pi.spawnSubagent,
+          forkContext: pi.forkContext,
         }),
     });
   }
@@ -147,6 +149,55 @@ export default function (pi) {
                         className: 'text-[11px]',
                       },
                     ],
+                  },
+                ],
+              },
+            },
+            // Sub-agent thật (hướng b) — log hoạt động (delta/tool) khi bật use_subagents
+            {
+              type: 'card',
+              when: { path: 'subagents', exists: true },
+              body: {
+                type: 'stack',
+                of: [
+                  {
+                    type: 'text',
+                    content: 'Sub-agents:',
+                    className: 'text-xs font-semibold',
+                  },
+                  {
+                    type: 'list',
+                    of: { path: 'subagents' },
+                    each: {
+                      type: 'stack',
+                      of: [
+                        {
+                          type: 'inline',
+                          of: [
+                            {
+                              type: 'field',
+                              path: '__item.role',
+                              className: 'text-[10px] font-mono text-cyan-600 dark:text-cyan-400',
+                            },
+                            {
+                              type: 'field',
+                              path: '__item.ev',
+                              className: 'text-[10px] text-gray-400',
+                            },
+                          ],
+                        },
+                        {
+                          type: 'field',
+                          path: '__item.tool',
+                          className: 'text-[10px] text-gray-500',
+                        },
+                        {
+                          type: 'field',
+                          path: '__item.file',
+                          className: 'text-[10px] text-gray-500 font-mono',
+                        },
+                      ],
+                    },
                   },
                 ],
               },
@@ -397,7 +448,6 @@ export default function (pi) {
       {
         models: cfg.model_verifier ? pi.createModelsCollection() : null,
         modelCfg: cfg.model_verifier || cfg.model_planner,
-        verifierCount: 1,
       },
     ).catch(() => null);
 

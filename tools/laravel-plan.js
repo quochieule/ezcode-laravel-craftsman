@@ -204,10 +204,25 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
 
   const opts = settingsOpts(ctx);
   const models = ctx.createModelsCollection();
-  const maxRounds = Number(cfg.plan_rounds ?? 3);
+  const maxRounds = Number(cfg.plan_rounds ?? 1); // v0.6: mặc định 1 vòng sửa (chỉ khi critic báo blocking)
   const exploreBudget = Number(cfg.explore_budget ?? 30);
   const registry = new GapRegistry();
   const umap = new UnderstandingMap();
+
+  // ── Sub-agent thật (hướng (b)) — opt-in qua settings use_subagents ──
+  // Mỗi vai (critic/planner/verifier) = 1 AgentSession có tool read, tự kiểm
+  // chứng file. Thiếu API (probe/test cũ) → fallback parallel calls như cũ.
+  let subagent = null;
+  if (cfg.use_subagents === true || cfg.use_subagents === 'true') {
+    const { createSubagentRunner } = await import('../lib/subagent.js');
+    subagent = createSubagentRunner(ctx, cfg);
+    if (!subagent.available) {
+      console.warn(
+        '[craftsman] use_subagents bật nhưng thiếu spawnSubagent/forkContext — fallback parallel calls',
+      );
+      subagent = null;
+    }
+  }
 
   try {
     // ── Gather facts (cache theo mtime — cached() trả {value, cached}, phải unwrap) ──
@@ -249,7 +264,19 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
     });
 
     // code graph (CBM) — CHỈ dùng project đã index sẵn, không bao giờ auto-index trong plan
-    const graphFacts = await maybeGraphFacts(root, opts);
+    const graphFacts = await maybeGraphFacts(root, params.goal, opts);
+
+    // ── Understanding bổ sung (0 LLM — đóng vòng học + tận dụng dữ liệu có sẵn) ──
+    // ① Knowledge + learned-checks: lưu ở reverify/agent nhưng CHƯA BAO GIỜ đọc lại
+    const { recallKnowledge, learnedChecks } = await import('../lib/memory.js');
+    const knowledge = await recallKnowledge(root).catch(() => []);
+    const learned = await learnedChecks(root).catch(() => []);
+    // ② View hierarchy: renderViewTree ĐÃ có sẵn (blade-graph.js) nhưng không được gọi
+    const { renderViewTree } = await import('../lib/laravel/frontend/blade-graph.js');
+    const viewTree = renderViewTree(viewResult.graph, 30);
+    // ③ Side-effect chain: event→listener→job→command→mail (0 LLM)
+    const { scanSideEffects, renderSideEffects } = await import('../lib/laravel/side-effects.js');
+    const sideEffects = renderSideEffects(await scanSideEffects(root));
 
     const facts = {
       fingerprint: fingerprint
@@ -264,12 +291,30 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
       architecture:
         graphFacts ||
         '(code graph không khả dụng — dùng schema/routes/contracts thay thế)',
+      views: viewTree || '(không có blade views)',
+      sideEffects,
+      learned: knowledge.length
+        ? `Knowledge đã học (${knowledge.length}): ${knowledge
+            .map((k) => k.content)
+            .slice(0, 10)
+            .join(' · ')}`
+        : '(chưa có knowledge lưu)',
+      learnedChecks: learned.length
+        ? `Lỗi lịch sử repo (${learned.length}): ${learned
+            .map((l) => l.check)
+            .slice(0, 10)
+            .join(' · ')}`
+        : '(chưa có lỗi lịch sử)',
       checklist: renderChecklist(params.featureType),
     };
+    const learnedForCritic = learned.map((l) => l.check).filter(Boolean);
 
     // ── ② Prompt critics (3 song song) ──
-    update('3 critics phản biện prompt', 0.15);
+    update('critic phản biện prompt', 0.15);
     const summary = await sessionSummary(ctx);
+    // critics LUÔN chạy bằng LLM call (không sub-agent) — đo: sub-agent critic
+    // 148s vs call 10.8s (chậm ~14×) mà critics không cần tool đọc file.
+    // 1 critic gộp 3 vai — "tất cả chỉ chạy 1 lần, không gộp lại".
     const critics = await runPromptCritics(
       { prompt: params.goal, sessionSummary: summary, repoHints: facts.fingerprint },
       { models, modelCfg, signal },
@@ -324,8 +369,8 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
         umap.add(`${f.file}::${fact}`, `code:${f.file}`);
     }
 
-    // ── ⑤ 5 planners + hội đồng ──
-    update('5 planners song song', 0.5);
+    // ── ⑤ planners + hội đồng ──
+    update('planners lập kế hoạch', 0.5);
     const planning = await runPlanners(
       {
         goal: params.goal,
@@ -333,7 +378,13 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
         facts,
         featureType: params.featureType || '',
       },
-      { models, modelCfg, signal },
+      {
+        models,
+        modelCfg,
+        signal,
+        subagent,
+        roleKey: 'architect', // "phần chính" — 1 planner, không hội đồng
+      },
     );
     if (signal.aborted) return;
     if (!planning.ok) {
@@ -366,7 +417,14 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
           .filter(Boolean),
       });
       const c = await critic(
-        { root, plan, checklistIds, contractDiffResult: cd, goal: params.goal },
+        {
+          root,
+          plan,
+          checklistIds,
+          contractDiffResult: cd,
+          goal: params.goal,
+          learnedChecks: learnedForCritic,
+        },
         { models, modelCfg, signal },
       );
       criticReport = c;
@@ -390,8 +448,8 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
           facts,
           featureType: params.featureType || '',
         },
-        // vòng re-plan chỉ cần lens Risk — rẻ hơn, tập trung chỗ critic chỉ ra
-        { models, modelCfg, signal, roleKeys: ['risk'] },
+        // vòng re-plan chỉ cần lens Risk — 1 vai, không merge
+        { models, modelCfg, signal, subagent, roleKey: 'risk' },
       );
       if (signal.aborted) return;
       if (focused.ok) plan = focused.merged;
@@ -411,7 +469,7 @@ async function runPlanPipeline({ params, ctx, root, cfg, modelCfg, sessionId, ta
     const lines = [
       `[Craftsman] PLAN XONG (task ${taskId.slice(0, 8)}) — thực thi theo plan dưới đây.`,
       '',
-      `📋 PLAN (${plan.planCount || 1} planner · score ${criticReport?.score ?? '?'}) — repo: ${root}`,
+      `📋 PLAN (score ${criticReport?.score ?? '?'}) — repo: ${root}`,
       '',
       renderMergedPlan(plan),
       '',
@@ -446,7 +504,7 @@ export function extractFileMentions(text, _root) {
  * Không bao giờ auto-index / auto-install trong plan (chậm + phụ thuộc binary).
  * Lỗi/missing → trả '' (degrade im lặng, plan vẫn chạy).
  */
-async function maybeGraphFacts(root, opts) {
+async function maybeGraphFacts(root, goal, opts) {
   try {
     const { cbm } = await import('../lib/cbm.js');
     const { realpath } = await import('node:fs/promises');
@@ -470,8 +528,61 @@ async function maybeGraphFacts(root, opts) {
       { project, aspects: 'overview' },
       { ...opts, timeoutMs: 8000 },
     );
-    return JSON.stringify(arch).slice(0, 2500);
+    const parts = [JSON.stringify(arch).slice(0, 2000)];
+
+    // v0.7 — deep code graph: search_graph + trace_path cho symbol chính của goal
+    // (tên operation đã xác minh bằng MCP tools/list — KHÔNG đoán).
+    // Đo thật: regex broad mất ~6s/call trên index cũ → giới hạn 1 keyword + 3s
+    // timeout (best-effort — lỗi/timed-out → bỏ, plan vẫn chạy).
+    const keywords = extractGraphKeywords(goal).slice(0, 1);
+    for (const kw of keywords) {
+      const sg = await cbm(
+        'search_graph',
+        { project, name_pattern: `.*${kw}.*` },
+        { ...opts, timeoutMs: 3000 },
+      ).catch(() => null);
+      const sgText = sg?.content?.[0]?.text || '';
+      if (sgText && !sgText.includes('No nodes match')) {
+        parts.push(`CALL GRAPH cho "${kw}":\n${sgText.slice(0, 700)}`);
+        // trace_path cho symbol đầu tiên tìm được (best-effort)
+        const first = sgText.match(/^([\w.-]+)\s/m);
+        if (first) {
+          const tp = await cbm(
+            'trace_path',
+            { project, function_name: first[1] },
+            { ...opts, timeoutMs: 3000 },
+          ).catch(() => null);
+          const tpText = tp?.content?.[0]?.text || '';
+          if (tpText && !tpText.includes('not found')) {
+            parts.push(`TRACE ${first[1]}:\n${tpText.slice(0, 700)}`);
+          }
+        }
+      }
+    }
+    return parts.join('\n\n').slice(0, 3500);
   } catch {
     return '';
   }
+}
+
+/** Trích từ khóa symbol-like từ goal (camelCase/snake_case dài ≥ 4, bỏ stopwords). */
+export function extractGraphKeywords(text) {
+  const STOP = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'them', 'then', 'than',
+    'when', 'where', 'which', 'what', 'have', 'has', 'was', 'were', 'been',
+    'are', 'not', 'but', 'can', 'could', 'should', 'would', 'will', 'into',
+    'them', 'about', 'after', 'before', 'between', 'thêm', 'sửa', 'cho', 'của',
+    'với', 'một', 'không', 'được', 'cần', 'phải', 'có', 'này', 'khi', 'xong',
+    'gửi', 'mail', 'hiển', 'thị', 'nút', 'bấm', 'danh', 'sách', 'trang', 'màn',
+    'hình', 'thêm', 'mới', 'xóa', 'đơn', 'hàng', 'người', 'dùng', 'admin',
+  ]);
+  const out = [];
+  for (const m of String(text || '').matchAll(/[A-Za-z][A-Za-z0-9_]{3,}/g)) {
+    const w = m[0];
+    if (STOP.has(w.toLowerCase())) continue;
+    if (/^[a-z]+$/.test(w) && w.length <= 6) continue; // từ chung ngắn
+    out.push(w);
+    if (out.length >= 3) break;
+  }
+  return out;
 }

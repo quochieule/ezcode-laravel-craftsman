@@ -13,6 +13,17 @@ const appRoot = join(here, 'fixtures', 'laravel-app');
 // Fake model: trả JSON theo vai (nhìn system prompt để chọn)
 const fakeRunner = async (system, _user) => {
   const sys = String(system);
+  if (sys.includes('GỘP LÀM MỘT')) { // critic gộp 3 vai (v0.6)
+    return {
+      ok: true,
+      json: {
+        intent: 'feature', scope: 'both',
+        explicit: ['nút duyệt đơn', 'gửi mail cho khách'],
+        ambiguous: ['có cần nhập số tiền thực thu không'],
+        missing: [], assumptions: ['dùng activity() theo convention'], sessionFacts: [],
+      },
+    };
+  }
   if (sys.includes('Người đọc yêu cầu') || sys.includes('Kẻ ngờ vực') || sys.includes('Người đối chiếu')) {
     return {
       ok: true,

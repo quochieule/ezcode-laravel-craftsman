@@ -30,10 +30,24 @@
         "description": "Model refine phân loại prompt (bỏ trống = chỉ dùng heuristic, 0 chi phí)."
       },
       {
+        "key": "use_subagents",
+        "label": "Sub-agent thật (pi.spawnSubagent)",
+        "type": "select",
+        "options": [
+          "true",
+          "false"
+        ],
+        "default": "false",
+        "description": "Chạy planners/verifiers bằng SUB-AGENT THẬT (AgentSession có tool read) — tự đọc file kiểm chứng touchpoint/evidence (plan chính xác hơn, giảm vòng lặp reverify). Chậm hơn và tốn token hơn (mỗi sub-agent = 1 agent loop). Critics LUÔN chạy bằng LLM call (đo: sub-agent critic chậm ~14×, không cần tool). Tắt = parallel LLM calls như cũ."
+      },
+      {
         "key": "strict_mode",
         "label": "Strict mode",
         "type": "select",
-        "options": ["true", "false"],
+        "options": [
+          "true",
+          "false"
+        ],
         "default": "true",
         "description": "Chặn edit khi yêu cầu phức tạp chưa explore/plan."
       },
@@ -41,7 +55,10 @@
         "key": "auto_rvp",
         "label": "Auto RVP sau task",
         "type": "select",
-        "options": ["true", "false"],
+        "options": [
+          "true",
+          "false"
+        ],
         "default": "true",
         "description": "Tự kiểm tra lại (deterministic + verifier) sau mỗi lượt agent."
       },
@@ -49,8 +66,8 @@
         "key": "plan_rounds",
         "label": "Plan-critic rounds tối đa",
         "type": "number",
-        "default": 3,
-        "description": "Số vòng critic→re-plan tối đa."
+        "default": 1,
+        "description": "Số vòng critic→re-plan tối đa. Chỉ chạy khi critic báo blocking (bình thường 0 vòng). Mặc định 1 = chạy lại tối đa 1 lần (v0.6: không chạy nhiều vòng)."
       },
       {
         "key": "explore_budget",
@@ -58,13 +75,6 @@
         "type": "number",
         "default": 30,
         "description": "Ngân sách đọc file cho explorer."
-      },
-      {
-        "key": "rvp_verifiers",
-        "label": "Số verifier cho RVP",
-        "type": "number",
-        "default": 3,
-        "description": "Số subagent fresh-eyes trong RVP."
       },
       {
         "key": "confidence_threshold",
@@ -84,7 +94,10 @@
         "key": "fingerprint_inject",
         "label": "Inject fingerprint vào system prompt",
         "type": "select",
-        "options": ["true", "false"],
+        "options": [
+          "true",
+          "false"
+        ],
         "default": "true",
         "description": "Chèn chân dung dự án vào đầu phiên (≤ 500 token)."
       },
@@ -92,7 +105,10 @@
         "key": "rvp_run_tests",
         "label": "RVP chạy php artisan test thật",
         "type": "select",
-        "options": ["true", "false"],
+        "options": [
+          "true",
+          "false"
+        ],
         "default": "false",
         "description": "Chạy test thật trong RVP (chậm — bật khi cần kiểm chứng sâu)."
       },
