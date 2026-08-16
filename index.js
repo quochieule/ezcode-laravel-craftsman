@@ -1,3 +1,4 @@
+import { createBackgroundManager } from './lib/background.js';
 import fingerprintTool from './tools/laravel-fingerprint.js';
 import schemaTool from './tools/laravel-schema.js';
 import contractsTool from './tools/laravel-contracts.js';
@@ -25,6 +26,10 @@ const MUTATING_RE =
   /^(edit|write|patch|apply|multi_edit|create|replace|insert|delete)$/i;
 
 export default function (pi) {
+  // Background Task Manager — tool chạy lâu (laravel_plan) trả về ngay, pipeline
+  // chạy nền; tiến trình publish lên panel, kết quả deliver qua followUp (hướng (a)).
+  const background = createBackgroundManager(pi);
+
   const tools = [
     fingerprintTool,
     schemaTool,
@@ -44,6 +49,7 @@ export default function (pi) {
           ...ctx,
           extensionSettings: pi.settings.all(),
           createModelsCollection: pi.createModelsCollection,
+          background,
         }),
     });
   }
@@ -52,19 +58,110 @@ export default function (pi) {
   const turnState = new Map(); // sessionId → { triaged, complex, planned }
 
   // ── Panel dashboard ──
+  // Schema theo chuẩn schemaRenderer (frontend/src/engine/schemaRenderer.js):
+  // root + defs + node types (stack/inline/field/text/list/card). KHÔNG dùng
+  // JSON-schema `{type:'object', properties}` — renderer không có node type
+  // 'object' → panel sẽ hiện "Schema render error" (bug v0.2). State = payload
+  // CUỐI CÙNG nhận được; mọi publish phải có key khớp field path (VD `plan.*`).
   try {
     pi.setPanelSchema?.('laravel-craftsman', {
       schema: {
-        type: 'object',
-        properties: {
-          lastTriage: { type: 'string', title: 'Triage gần nhất' },
-          lastPlanScore: { type: 'string', title: 'Plan score' },
-          episodes: {
-            type: 'array',
-            title: 'Episodes gần nhất',
-            items: { type: 'object' },
+        defs: {
+          epRow: {
+            type: 'stack',
+            of: [
+              {
+                type: 'field',
+                path: '__item.task',
+                className: 'text-[11px] text-gray-600 dark:text-gray-300',
+              },
+              {
+                type: 'inline',
+                of: [
+                  {
+                    type: 'field',
+                    path: '__item.intent',
+                    className: 'text-[10px] text-gray-400 font-mono',
+                  },
+                  {
+                    type: 'field',
+                    path: '__item.missingCount',
+                    className: 'text-[10px] text-amber-500 font-mono',
+                  },
+                ],
+              },
+            ],
           },
-          gaps: { type: 'array', title: 'Gaps mở', items: { type: 'object' } },
+        },
+        root: {
+          type: 'stack',
+          of: [
+            {
+              type: 'inline',
+              of: [
+                {
+                  type: 'text',
+                  content: 'Triage: ',
+                  className: 'text-xs text-gray-400',
+                },
+                {
+                  type: 'field',
+                  path: 'lastTriage',
+                  className: 'text-xs',
+                },
+              ],
+            },
+            // Plan nền (hướng a) — card chỉ hiện khi có task
+            {
+              type: 'card',
+              when: { path: 'plan.id', exists: true },
+              body: {
+                type: 'stack',
+                of: [
+                  {
+                    type: 'field',
+                    path: 'plan.id',
+                    className: 'text-[10px] font-mono text-gray-400',
+                  },
+                  {
+                    type: 'inline',
+                    of: [
+                      {
+                        type: 'text',
+                        content: 'Status: ',
+                        className: 'text-[11px] text-gray-400',
+                      },
+                      {
+                        type: 'field',
+                        path: 'plan.status',
+                        className: 'text-[11px] font-semibold',
+                      },
+                      {
+                        type: 'text',
+                        content: ' · ',
+                        className: 'text-[11px] text-gray-400',
+                      },
+                      {
+                        type: 'field',
+                        path: 'plan.stage',
+                        className: 'text-[11px]',
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+            {
+              type: 'text',
+              content: 'Episodes:',
+              className: 'text-xs font-semibold mt-1',
+            },
+            {
+              type: 'list',
+              of: { path: 'episodes' },
+              each: { component: 'epRow' },
+            },
+          ],
         },
       },
       tabLabel: 'Craftsman',
@@ -75,10 +172,29 @@ export default function (pi) {
           const episodes = cwd
             ? await recentEpisodes(cwd, 5).catch(() => [])
             : [];
+          const running = sessionId ? background.runningFor(sessionId) : null;
           return {
             ok: true,
             lastTriage: turnState.get(sessionId)?.triaged ? '✓' : '—',
+            plan: running
+              ? {
+                  id: running.id,
+                  kind: running.kind,
+                  status: running.status,
+                  stage: running.stage,
+                  progress: running.progress,
+                  startedAt: running.startedAt,
+                }
+              : null,
             episodes,
+          };
+        }
+        if (action === 'cancelPlan') {
+          const n = sessionId ? background.cancelBySession(sessionId) : 0;
+          return {
+            ok: true,
+            canceled: n,
+            message: n ? `Đã hủy ${n} task nền.` : 'Không có task nền nào đang chạy.',
           };
         }
         return { ok: false, error: `action không hỗ trợ: ${action}` };
@@ -100,9 +216,19 @@ export default function (pi) {
   pi.on('input', async (event, ctx) => {
     const cfg = pi.settings?.all?.() ?? {};
     const text = event?.text || '';
-    if (!text.trim() || text.includes('[Craftsman]')) return undefined; // prompt do chính mình transform — không lặp
 
     const sessionId = ctx?.sessionId;
+
+    // Guard chống ping-pong auto-RVP: prompt do NGƯỜI DÙNG gửi reset cờ,
+    // followUp do extension tự bơm (deliverAs:'followUp' → source:'extension')
+    // KHÔNG reset — nếu không agent_end sẽ auto-verify chính turn verify của
+    // mình mãi: verify → agent sửa file → agent_end → RVP → followUp → ...
+    if (sessionId) {
+      const st = turnState.get(sessionId);
+      if (st && event?.source !== 'extension') st.autoRvpSent = false;
+    }
+
+    if (!text.trim() || text.includes('[Craftsman]')) return undefined; // prompt do chính mình transform — không lặp
     const { triage, transformForIntent } =
       await import('./lib/stages/triage.js');
 
@@ -183,9 +309,16 @@ export default function (pi) {
     return undefined;
   });
 
-  // ── session_shutdown: dọn state per-session (tránh leak) ──
+  // ── session_shutdown: dọn state per-session (tránh leak) + hủy task nền ──
   pi.on('session_shutdown', (event, ctx) => {
     turnState.delete(ctx?.sessionId);
+    // Task nền bám vào pi/session đã chết — deliver sẽ vô nghĩa, hủy luôn
+    // (panel cũng không còn ai xem).
+    try {
+      background.cancelBySession(ctx?.sessionId);
+    } catch {
+      /* bỏ qua */
+    }
     return undefined;
   });
 
@@ -268,7 +401,13 @@ export default function (pi) {
       },
     ).catch(() => null);
 
-    if (result?.missing?.length) {
+    if (result?.missing?.length && !state?.autoRvpSent) {
+      // Chặn ping-pong: mỗi chuỗi turn từ 1 prompt người dùng chỉ auto-verify +
+      // đẩy followUp 1 LẦN. Turn do chính followUp này khởi tạo (source:'extension')
+      // không reset cờ ở input handler → nếu agent vẫn sửa file ở turn đó, agent_end
+      // này sẽ skip, không sinh followUp thứ 2/3/... Cờ reset khi có prompt mới.
+      if (state) state.autoRvpSent = true;
+      else turnState.set(ctx?.sessionId, { autoRvpSent: true });
       try {
         pi.sendUserMessage?.(
           `[Craftsman auto-verify] Phát hiện ${result.missing.length} vấn đề sau lượt vừa rồi:\n` +

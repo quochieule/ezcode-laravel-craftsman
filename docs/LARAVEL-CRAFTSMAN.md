@@ -120,6 +120,10 @@ extensions/laravel-craftsman/
 
 ## 4. Pipeline 8 bước
 
+> **v0.3 — CHẠY NỀN (hướng (a))**: `laravel_plan` trả về NGAY; pipeline chạy
+> ở background sau khi turn kết thúc (xem §4.1). Các bước ②–⑧ bên dưới là nội
+> dung pipeline nền — thứ tự và dependency giữ nguyên.
+
 ```
 ① TRIAGE (tự động, MỌI prompt — input event, 1 call rẻ)
    intent = feature | bugfix | question | reverify | refactor/audit | optimize | trivial
@@ -165,6 +169,42 @@ extensions/laravel-craftsman/
    guardrail sống (chặn edit vùng unknown) · verify Laravel-aware sau task (agent_end)
    · user hỏi "kiểm tra lại" → RVP (§6.12) · lỗi user tìm ra → học (§6.13)
 ```
+
+### 4.1 Background execution (hướng (a)) — v0.3
+
+Vì sao: pipeline mất 30–120s+ chạy đồng bộ trong tool call → chặn cứng turn
+(lỗi "Agent is already processing" khi user gõ prompt giữa chừng — SDK
+`agent-session.js:830` chỉ nhận prompt thứ 2 khi có `streamingBehavior`, còn
+bridge ezcode `manager.js:106-111` queue thành followUp).
+
+Cơ chế (`lib/background.js` — Background Task Manager):
+
+```
+agent gọi laravel_plan
+  → execute: validate nhanh (goal/repo/model) → background.start(sessionId, root)
+  → trả về NGAY: "⏳ Plan đang chạy nền (task xxx)…"  [guard: 1 task/session]
+  → turn kết thúc — agent rảnh, user gõ prompt khác được (song song)
+  → pipeline nền (cùng process, KHÔNG spawn):
+      critics → explore → planners → critic → re-plan
+      mỗi stage: background.update → publishToSession(sessionId, 'laravel-craftsman',
+                   { ev:'task_update', plan:{status, stage, progress} }) → panel
+  → kết thúc:
+      done      → sendUserMessage("[Craftsman] PLAN XONG…", {deliverAs:'followUp'})
+      cần hỏi   → deliver câu hỏi → agent hỏi user → gọi LẠI với context
+      lỗi       → deliver lỗi
+  → hủy: panel Craftsman (action cancelPlan) / session_shutdown → abort
+```
+
+Luật:
+- **Signal riêng**: task dùng AbortController RIÊNG, KHÔNG dùng signal của turn
+  (turn đã kết thúc; signal cũ có thể bị abort bất kỳ lúc nào → giết cả pipeline).
+- **Guard 1 task/session**: agent gọi `laravel_plan` lần 2 lúc đang chạy → nhận
+  thông báo chờ, không spawn pipeline thứ 2 (tốn token vô ích).
+- **Deliver chỉ khi task còn running**: task đã hủy/lỗi → không đẩy message muộn.
+- **Marker `[Craftsman]`** ở đầu mọi deliver → input handler bỏ qua triage
+  (`index.js` — không lặp transform).
+- **`session_shutdown` → `cancelBySession`**: pi/session đã chết, deliver vô nghĩa.
+
 
 ---
 

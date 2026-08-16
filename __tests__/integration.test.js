@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import planTool from '../tools/laravel-plan.js';
 import { verifyClaims } from '../lib/stages/critic.js';
+import { createBackgroundManager } from '../lib/background.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(here, 'fixtures', 'laravel-app');
@@ -68,11 +69,39 @@ function fakeModels() {
   };
 }
 
-test('INTEGRATION: laravel_plan pipeline đầy đủ chạy end-to-end trên fixture (không crash)', async () => {
+/** Stub pi cho background manager — capture deliver + publish. */
+function fakeBgPi() {
+  const delivered = [];
+  const published = [];
+  return {
+    pi: {
+      sendUserMessage: (text, opts) => delivered.push({ text, opts }),
+      publishToSession: (_sid, _ch, payload) => published.push(payload),
+    },
+    delivered,
+    published,
+  };
+}
+
+/** Poll tới khi pred() trả truthy (background pipeline chạy async). */
+async function waitFor(pred, timeoutMs = 20000, stepMs = 100) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = pred();
+    if (v) return v;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error('timeout chờ deliver từ background pipeline');
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
+test('INTEGRATION: laravel_plan CHẠY NỀN — execute trả về ngay, plan tới qua sendUserMessage followUp', async () => {
+  const bg = fakeBgPi();
   const ctx = {
     cwd: appRoot,
     extensionSettings: { model_planner: { provider: 'fake', modelId: 'fake' } },
     createModelsCollection: fakeModels,
+    background: createBackgroundManager(bg.pi),
   };
   const res = await planTool.execute(
     't1',
@@ -81,9 +110,22 @@ test('INTEGRATION: laravel_plan pipeline đầy đủ chạy end-to-end trên fi
     undefined,
     ctx,
   );
-  const text = res.content[0].text;
+  // Trả về NGAY — không chứa plan đồng bộ
+  assert.equal(res.details?.background, true, 'phải là background mode');
+  assert.ok(res.content[0].text.includes('chạy NỀN'), 'phải báo chạy nền');
+  assert.ok(
+    !res.content[0].text.includes('📋 PLAN'),
+    'không được chứa plan đồng bộ',
+  );
+
+  // Plan tới qua followUp (turn mới của agent)
+  const msg = await waitFor(() =>
+    bg.delivered.find((d) => d.text.includes('PLAN')),
+  );
+  assert.equal(msg.opts?.deliverAs, 'followUp');
+  const text = msg.text;
   // regression: bug cached() unwrap từng làm crash "Cannot read properties of undefined"
-  assert.ok(!text.startsWith('Lỗi:'), `plan crash: ${text}`);
+  assert.ok(!text.startsWith('Lỗi:'), `plan crash: ${text.slice(0, 200)}`);
   assert.ok(text.includes('PLAN'), 'phải có plan render');
   assert.ok(text.includes('score'), 'phải có critic score');
   assert.ok(
@@ -91,6 +133,52 @@ test('INTEGRATION: laravel_plan pipeline đầy đủ chạy end-to-end trên fi
     'phải có requirements map từ critics',
   );
   assert.ok(text.includes('OrderService'), 'plan phải chứa touchpoint service');
+
+  // Panel phải nhận được chuỗi event
+  assert.ok(
+    bg.published.some((p) => p.ev === 'task_start'),
+    'phải publish task_start',
+  );
+  assert.ok(
+    bg.published.some((p) => p.ev === 'task_update'),
+    'phải publish task_update (progress)',
+  );
+  assert.ok(
+    bg.published.some((p) => p.ev === 'task_end'),
+    'phải publish task_end',
+  );
+});
+
+test('INTEGRATION: laravel_plan guard — 1 task nền/session, gọi lần 2 bị chặn', async () => {
+  const bg = fakeBgPi();
+  const ctx = {
+    cwd: appRoot,
+    extensionSettings: { model_planner: { provider: 'fake', modelId: 'fake' } },
+    createModelsCollection: fakeModels,
+    background: createBackgroundManager(bg.pi),
+    sessionManager: { getSessionId: () => 'sess-1' },
+  };
+  const r1 = await planTool.execute(
+    't1',
+    { goal: 'thêm nút duyệt đơn' },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(r1.details?.background, true);
+
+  const r2 = await planTool.execute(
+    't2',
+    { goal: 'thêm nút khác' },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.ok(
+    r2.content[0].text.includes('đang chạy nền'),
+    'phải báo task đang chạy',
+  );
+  assert.ok(!r2.content[0].text.includes('📋 PLAN'));
 });
 
 test('INTEGRATION: plan thiếu model → báo cấu hình rõ, không crash', async () => {

@@ -48,7 +48,7 @@ test('index.js: probe-safe — register đủ 7 tools, không throw với stub p
   }
 });
 
-test('index.js: wrapper inject extensionSettings + createModelsCollection vào ctx', async () => {
+test('index.js: wrapper inject extensionSettings + createModelsCollection + background vào ctx', async () => {
   // patch module tool trước khi factory chạy — factory wrap execute tại thời điểm gọi
   const fingerprintTool = await import('../tools/laravel-fingerprint.js');
   const original = fingerprintTool.default.execute;
@@ -67,10 +67,41 @@ test('index.js: wrapper inject extensionSettings + createModelsCollection vào c
     assert.ok(seenCtx, 'execute gốc phải được gọi qua wrapper');
     assert.deepEqual(seenCtx.extensionSettings, {});
     assert.equal(typeof seenCtx.createModelsCollection, 'function');
+    assert.equal(typeof seenCtx.background, 'object', 'phải inject background manager');
+    assert.equal(typeof seenCtx.background.start, 'function');
+    assert.equal(typeof seenCtx.background.deliver, 'function');
     assert.equal(res.content[0].text, 'intercepted');
   } finally {
     fingerprintTool.default.execute = original;
   }
+});
+
+test('index.js: panel schema theo chuẩn schemaRenderer (root/defs) — KHÔNG dùng JSON-schema properties', () => {
+  const panels = [];
+  const pi = {
+    registerTool: () => {},
+    on: () => {},
+    settings: { all: () => ({}) },
+    createModelsCollection: () => null,
+    setPanelSchema: (channel, panel) => panels.push({ channel, panel }),
+  };
+  entryFactory(pi);
+  const craftsman = panels.find((p) => p.channel === 'laravel-craftsman');
+  assert.ok(craftsman, 'phải đăng ký panel craftsman');
+  const schema = craftsman.panel.schema;
+  // Regression bug v0.2: {type:'object', properties} → renderer throw
+  // UnknownNodeTypeError('object') (frontend/src/engine/schemaRenderer.js chỉ
+  // có stack/inline/field/text/list/card/...). Phải có root + node type hợp lệ.
+  assert.ok(schema.root, 'schema phải có root');
+  assert.equal(schema.properties, undefined, 'KHÔNG được dùng JSON-schema properties');
+  assert.ok(Array.isArray(schema.root.of), 'root phải là stack có of[]');
+  // Field path của payload phải khớp: plan.* (background.js publish key `plan`)
+  const s = JSON.stringify(schema);
+  assert.ok(s.includes('plan.id'), 'schema phải tham chiếu plan.id');
+  assert.ok(s.includes('plan.status'), 'schema phải tham chiếu plan.status');
+  assert.ok(s.includes('plan.stage'), 'schema phải tham chiếu plan.stage');
+  assert.ok(s.includes('lastTriage'), 'schema phải tham chiếu lastTriage');
+  assert.ok(s.includes('episodes'), 'schema phải tham chiếu episodes');
 });
 
 test('context: resolveRepoRoot + isLaravelRepo trên fixture', async () => {
